@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "memhub": {
+      "type": "http",
+      "url": "https://api.memhub.xtrace.ai/mcp-server/mcp",
+      "headers": {
+        "X-MemHub-Plugin-Version": "0.110.0"
+      },
+      "headersHelper": "python3 -s -E \"${CLAUDE_PLUGIN_ROOT}/scripts/mcp_headers.py\"",
+      "oauth": {
+        "clientId": "xHoQkYd7uNUfaNX6Tyv143e1Ev7u3XS0",
+        "callbackPort": 8765,
+        "authServerMetadataUrl": "https://memhub-prod.us.auth0.com/.well-known/openid-configuration"
+      }
+    }
+  }
+}

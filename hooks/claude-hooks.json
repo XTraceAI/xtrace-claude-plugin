@@ -1,0 +1,212 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|Edit|MultiEdit|Write|NotebookEdit|Read)$",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "statusMessage": "MemHub: checking team rules",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" PreToolUse rulebook_hook"
+          }
+        ]
+      },
+      {
+        "matcher": "^mcp__.+__add_memory$",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" PreToolUse add_memory_gate"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "async": true,
+            "timeout": 300,
+            "statusMessage": "MemHub: flushing session memory",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" PostToolUse flush_session"
+          }
+        ]
+      },
+      {
+        "matcher": "^(Edit|MultiEdit|Write|NotebookEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "statusMessage": "MemHub: checking artifact links",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" PostToolUse artifact_sync_reminder"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 30,
+            "statusMessage": "MemHub: PR created — arming babysit loop",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" PostToolUse pr_babysit_trigger"
+          }
+        ]
+      },
+      {
+        "matcher": "^(Edit|MultiEdit|Write|Bash)$",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" PostToolUse md_capture"
+          }
+        ]
+      },
+      {
+        "matcher": "^(Bash|Edit|MultiEdit|Write|NotebookEdit|Read)$",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "statusMessage": "MemHub: checking team rules",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" PostToolUse rulebook_hook"
+          }
+        ]
+      },
+      {
+        "matcher": "^(Bash|mcp__.*[Gg]it[Hh]ub.*__.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 15,
+            "statusMessage": "MemHub: checking PR link",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" PostToolUse pr_link_trigger"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" SessionStart capture_health"
+          },
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" SessionStart brain_brief"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "statusMessage": "MemHub: loading team rules",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" SessionStart rulebook_hook"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" SessionStart harness_stop"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 8,
+            "statusMessage": "MemHub: delivering pending branch memory pointers",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" UserPromptSubmit brain_brief"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "statusMessage": "MemHub: arming team rules on this prompt",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" UserPromptSubmit rulebook_hook"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "async": true,
+            "timeout": 300,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" Stop flush_turn"
+          },
+          {
+            "type": "command",
+            "async": true,
+            "timeout": 60,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" Stop brain_brief"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "async": true,
+            "timeout": 150,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" Stop md_capture_flush"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "async": true,
+            "timeout": 60,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" Stop rulebook_hook"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" Stop harness_stop"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "async": true,
+            "timeout": 360,
+            "statusMessage": "MemHub: saving session memory",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" SessionEnd session_end"
+          }
+        ]
+      }
+    ]
+  }
+}

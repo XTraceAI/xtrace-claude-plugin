@@ -1,0 +1,466 @@
+#!/usr/bin/env python3
+"""Authenticate this plugin install to MemHub — the command behind /memhub:login.
+
+**Why a dedicated command.** The plugin's hooks authenticate from a token cache
+that only a FOREGROUND script can create (see ``_memhub_auth``: a background
+hook must never open a browser, so it can only ever consume a token someone
+else minted). Nothing else in the product provisions that token on purpose —
+pointing a stuck user at ``/memhub:import-session`` instead conflates login
+with a different operation that does real, unrequested work and can fail for
+reasons having nothing to do with auth, which makes the one signal you're
+trying to read — am I authenticated? — impossible to read cleanly.
+
+**What it checks beyond "did the browser flow succeed".** A login that works
+today and dies tomorrow is not a successful login. If the authorization server
+issues no refresh token, the access token simply expires (24h here) and every
+hook goes quiet until someone logs in again. So this reports renewal as a
+first-class result, at the moment the token is minted, rather than leaving it
+to be discovered a day later by its absence.
+
+Usage (all optional):
+    login.py             log in if needed, then verify and report
+    login.py --status    report only; never opens a browser
+    login.py --force     discard the cached token and re-run the browser flow
+
+Which backend it targets follows the INSTALL: run from the ``memhub`` plugin it
+authenticates production, from ``memhub-staging`` it authenticates staging.
+They are different Auth0 tenants with separate caches, so logging into one says
+nothing about the other.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import atomic_write  # noqa: E402 — stdlib-only, sits beside this file
+import pak  # noqa: E402 — stdlib-only, sits beside this file
+from plugin_onboarding import HOSTS, LoginCompletion, active_completion, guide_url
+from pak import PakError  # noqa: E402
+
+from _memhub_auth import (  # noqa: E402
+    NonInteractiveAuthRequired,
+    _access_token_expiry,
+    default_url,
+    explicit_token,
+    open_session,
+    resolve_url_and_auth,
+    skill_command,
+    token_cache_path,
+)
+from room_map import env_for_url  # noqa: E402
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Human duration. Days once there are any — a 90-day key rendered as
+    "2159h59m" is technically right and unreadable, and the number people need
+    to sanity-check is "about three months", not the hour count."""
+    seconds = max(0, int(seconds))
+    days, rem = seconds // 86400, seconds % 86400
+    hours, minutes = rem // 3600, (rem % 3600) // 60
+    if days:
+        return f"{days}d{hours:02d}h"
+    return f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"
+
+
+def _renewal_report(url: str) -> tuple[bool, str]:
+    """``(ok, description)`` for whether this login can renew itself.
+
+    Read from the cache the browser flow just wrote, because the grant is the only
+    authority on what was actually issued — asking for ``offline_access`` and
+    receiving it are different things, and the difference is invisible until
+    the access token lapses.
+    """
+    try:
+        cached = json.loads(token_cache_path(url).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False, "unknown (token cache unreadable)"
+    if not cached.get("refresh_token"):
+        return False, "NONE — this login cannot renew itself"
+    exp = _access_token_expiry(cached.get("access_token") or "")
+    if exp is None:
+        return True, "automatic (refresh token stored)"
+    return True, (f"automatic (refresh token stored; access token valid "
+                  f"{_fmt_duration(exp - time.time())})")
+
+
+async def _verify(url: str, headers, auth) -> int:
+    """Prove the credential actually works, and return the tool count.
+
+    A cached token file is not proof of anything — it can be expired, revoked,
+    or issued by the wrong tenant. ``list_tools`` is the cheapest call that
+    exercises the full path (transport, auth, server) with no side effects.
+    An OAuth bearer the server refuses runs the browser flow and is retried
+    once (``open_session``); under --status that raises
+    NonInteractiveAuthRequired instead.
+    """
+    session = await open_session(url, headers, auth)
+    return len(await session.list_tools())
+
+
+def _describe_expiry(record: dict | None) -> str:
+    remaining = pak.expires_in_s(record)
+    if remaining is None:
+        return "does not expire"
+    return f"expires in {_fmt_duration(remaining)}"
+
+
+def _report_key(url: str, record: dict | None) -> int:
+    """Print the state of the access key that authenticated this run."""
+    if not record:
+        print("credential  : access key (details unavailable)")
+        return 0
+    print(f"credential  : access key '{record.get('label')}' "
+          f"({_describe_expiry(record)})")
+    print("renewal     : n/a — a key does not refresh; "
+          f"{skill_command('login')} mints a new one when this lapses")
+    return 0
+
+
+# The server's English refusals for an account that exists in Auth0 but not yet
+# in MemHub (no users row, or no provisioned team workspace). The row is only
+# created when the user first signs in to the web app, so a plugin-only user —
+# or one whose sign-in the web app refused (unverified email, a non-work
+# address) — passes the token check here and then fails on the key API.
+# Matched on wording because that is all the API promises.
+_UNPROVISIONED = ("user not found", "provisioned team workspace")
+
+
+def _is_unprovisioned(exc: PakError) -> bool:
+    msg = (getattr(exc, "server_msg", None) or "").lower()
+    return (getattr(exc, "status", None) in (401, 403)
+            and any(marker in msg for marker in _UNPROVISIONED))
+
+
+def _web_app(url: str) -> str:
+    guide = guide_url(url) or ""
+    return guide.rsplit("/plugin", 1)[0] or "the MemHub web app"
+
+
+def _ensure_key(url: str, env: str) -> str:
+    """Mint (or reuse) this machine's access key using the fresh OAuth token.
+
+    Returns ``ok`` when a key is now in place, ``failed`` when the hooks stay
+    on the OAuth token, or ``unprovisioned`` when the account has no MemHub
+    workspace yet — which no credential here can fix.
+
+    Best-effort by design. A failure here is NOT a failed login: OAuth just
+    verified, so capture works today either way, and turning a successful login
+    into an error over an optimisation would be the wrong trade. It is reported
+    plainly so the user knows they are still on the short-lived credential.
+    The exception is ``unprovisioned``: every tool call would be refused too,
+    so calling that a login would be false.
+    """
+    try:
+        cached = json.loads(token_cache_path(url).read_text(encoding="utf-8"))
+        bearer = cached.get("access_token")
+        if not bearer:
+            raise PakError("no access token to authorise minting with")
+        record, how = pak.ensure(url, bearer)
+    except PakError as exc:
+        if _is_unprovisioned(exc):
+            print("access key  : NOT created — this account has no MemHub team "
+                  "workspace yet")
+            print(f"fix         : sign in once to {_web_app(url)} with a verified "
+                  "work email (that creates the account and workspace), then "
+                  f"re-run {skill_command('login')}")
+            return "unprovisioned"
+        print(f"access key  : NOT created ({exc})")
+        print("              capture will keep using the OAuth token, which "
+              f"expires; re-run {skill_command('login')} when it does.")
+        return "failed"
+    except Exception as exc:  # noqa: BLE001 — never fail a good login over this
+        print(f"access key  : NOT created ({type(exc).__name__}: {exc})")
+        return "failed"
+
+    verb = {"reused": "reusing", "replaced": "replaced orphaned key",
+            "minted": "created"}.get(how, how)
+    print(f"access key  : {verb} '{record.get('label')}' "
+          f"({_describe_expiry(record)})")
+    print(f"              the {env} hooks now authenticate with this key "
+          "instead of the expiring OAuth token.")
+    return "ok"
+
+
+async def _run(status_only: bool, force: bool) -> int:
+    url = default_url()
+    env = env_for_url(url)
+    cache = token_cache_path(url)
+
+    # --force must move the old credential OUT OF THE WAY, not destroy it.
+    #
+    # Clearing the cache is what makes --force mean anything: a still-valid
+    # cached token would otherwise be used happily and no re-authentication
+    # would happen at all. But deleting outright is a durability foot-gun, and
+    # it bites hardest in the most likely case — force-refreshing a WORKING
+    # token to pick up a newly granted scope. If the browser flow then fails
+    # (tab closed, timeout, no network), the user has traded a working login
+    # for none at all. So it is set aside and restored unless a verified login
+    # replaces it.
+    stash: Path | None = None
+    if force and cache.exists():
+        stash = cache.with_suffix(".json.prelogin")
+        # atomic_write.replace, not bare Path.replace: hooks read this cache
+        # concurrently, and on Windows a read in flight makes a plain replace
+        # raise a sharing violation.
+        atomic_write.replace(cache, stash)
+        print(f"set aside the cached {env} token (restored if login fails)")
+
+    # The stored key has to go too, and it is the more important half now: a
+    # valid key short-circuits auth entirely, so leaving it would make --force
+    # confirm the exact credential the user is trying to replace and never
+    # reach the browser at all. Dropping the LOCAL copy is safe on its own —
+    # `pak.ensure` revokes the server-side key it finds under this label before
+    # minting, so the cap keeps counting real credentials.
+    key_stash: dict | None = None
+    if force:
+        key_stash = pak.load(url)
+        if key_stash:
+            pak.forget(url)
+            print(f"set aside the stored {env} access key "
+                  f"'{key_stash.get('label')}' (restored if login fails)")
+
+    # Set only after the new credential has been VERIFIED against the server.
+    # The stash is discarded on this flag and not on `cache.exists()`, because
+    # existence is not success: the flow writes the token as soon as the grant
+    # returns, so a flow that dies during verification — or a truncated write —
+    # leaves a file behind that proves nothing. Keying on existence would trade
+    # a known-good credential for an unproven one, which is the same durability
+    # foot-gun the stash exists to prevent, just moved one step later.
+    verified = False
+
+    def _restore() -> None:
+        """Reinstate the old credentials unless a verified login replaced them."""
+        # The key first: if the login failed, the old key is very likely still
+        # valid server-side (nothing revokes it until `pak.ensure` runs, which
+        # only happens after verification), so putting it back restores working
+        # capture rather than merely restoring a file.
+        if key_stash and not (verified and pak.load(url)):
+            pak.save(url, key_stash)
+            print(f"login did not complete — restored the previous {env} access key")
+
+        if not (stash and stash.exists()):
+            return
+        if verified and cache.exists():
+            stash.unlink()  # superseded by a login we actually proved works
+        else:
+            # Atomic rename, so it also overwrites any unverified remnant the
+            # failed flow left at `cache`. Patient on Windows (see above) —
+            # a restore that crashes on a sharing violation would strand the
+            # user's working token in the .prelogin stash.
+            atomic_write.replace(stash, cache)
+            print(f"login did not complete — restored the previous {env} token")
+
+    print(f"environment : {env} ({url})")
+
+    # ``finally``, so the stash is resolved on EVERY exit — a clean failure, an
+    # unexpected raise, or success. _restore() is a no-op once a new token has
+    # landed, which makes "always call it" the correct rule rather than a
+    # per-branch judgement that a later edit could forget.
+    try:
+        try:
+            # The returned url is DISCARDED, deliberately. resolve_url_and_auth
+            # echoes back exactly the url it was given (it only substitutes
+            # default_url() when passed None, and we pass one), so rebinding it
+            # here would add nothing while making `cache`, computed above from
+            # the same url, look like it might refer to a different file than
+            # the one the browser flow writes. It cannot; keeping one binding is what
+            # makes that obvious rather than merely true.
+            _, headers, auth = resolve_url_and_auth(url, interactive=not status_only)
+        except Exception as exc:  # noqa: BLE001 — report, never traceback
+            print(f"status      : FAILED to prepare auth ({exc})")
+            return 1
+
+        # Three sources now, not two. Inferring from `headers` alone reported a
+        # stored access key as the explicit token — naming the wrong credential in
+        # the one command whose job is telling you which credential you are on.
+        explicit = explicit_token()
+        if explicit:
+            source = f"bearer ({explicit[1]})"
+        elif headers and headers.get("Authorization"):
+            source = "stored access key (mhk_)"
+        else:
+            source = "browser OAuth (plugin client)"
+        print(f"mode        : {source}")
+
+        try:
+            tools = await _verify(url, headers, auth)
+        except BaseException as exc:  # noqa: BLE001 — a cancelled flow is a failed login too
+            if _is_noninteractive(exc):
+                # --status only. Says nothing about whether a browser login
+                # WOULD work; it reports that no usable token is cached now.
+                print("status      : NOT LOGGED IN (no usable cached token)")
+                print(f"fix         : run {skill_command('login')}")
+                return 1
+            leaf = _leaf(exc)
+            print(f"status      : FAILED ({type(leaf).__name__}: {leaf})")
+            return 1
+
+        # Proven against the server — only now may the stash be discarded.
+        verified = True
+        print(f"status      : OK — server exposes {tools} tools")
+
+        if explicit:
+            # Provisioned outside this flow entirely; nothing here owns its
+            # lifecycle, so there is no renewal story to tell and no key to mint.
+            print(f"renewal     : n/a ({explicit[1]} is supplied explicitly)")
+            return 0
+
+        if headers and headers.get("Authorization"):
+            # A stored access key answered — this login had nothing to do but
+            # confirm it still works.
+            return _report_key(url, pak.load(url))
+
+        # OAuth verified. Trade that short-lived session for a durable key, so
+        # the hooks — which can never open a browser — stop depending on a
+        # credential that expires inside a day and needs a refresh they cannot
+        # perform from a cold process.
+        minted = _ensure_key(url, env)
+        if minted == "unprovisioned":
+            return 1
+        if minted == "ok":
+            # The OAuth token is now a bootstrap artefact, not the credential
+            # anything runs on. Reporting its renewal here would describe the
+            # wrong thing — and worse, an "issued no refresh token" warning
+            # would send the user to fix a tenant setting that no longer has
+            # any bearing on whether capture keeps working.
+            print("renewal     : not needed — the key is the credential now; "
+                  f"{skill_command('login')} mints a fresh one when it lapses")
+            return 0
+
+        ok, detail = _renewal_report(url)
+        print(f"renewal     : {detail}")
+        if not ok:
+            # Not a failed login — the token works right now. It is a login
+            # with a known expiry date and no recovery, which is worth saying
+            # loudly here rather than discovering as silence tomorrow.
+            print()
+            print("WARNING: the authorization server issued no refresh token, so this")
+            print("login will stop working when the access token expires, and memory")
+            print(f"capture will go quiet until someone runs {skill_command('login')} again.")
+            print("To fix it at the source, enable 'Allow Offline Access' on the")
+            print(f"{env} API in Auth0 and make sure 'offline_access' appears in the")
+            print(f"server's advertised scopes_supported, then re-run {skill_command('login')} --force.")
+        return 0
+    finally:
+        _restore()
+
+
+def _leaf(exc: BaseException) -> BaseException:
+    """The deepest single exception under any group or ``raise ... from`` wrapping.
+
+    A wrapper ("tools/list failed: <urlopen error ...>") often names less than
+    what it wraps, and a group ("unhandled errors in a TaskGroup") names
+    nothing; the leaf ("AttributeError: module 'os' has no attribute
+    'fchmod'") names the bug. Walks EVERY member and cause — a group's first
+    member is often a benign CancelledError sibling of the real failure, so
+    the first NON-cancellation leaf in depth-first order wins, with any leaf
+    as fallback. Cycle-guarded, and never returns a group node while a leaf
+    exists."""
+    leaves: list[tuple[BaseException, bool]] = []   # (leaf, via_context)
+    seen: set[int] = set()
+    stack: list[tuple[BaseException, bool]] = [(exc, False)]
+    while stack:
+        current, via_context = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        children = [(sub, via_context)
+                    for sub in (getattr(current, "exceptions", None) or ())]
+        # An EXPLICIT cause is authoritative. __context__ is only consulted
+        # when there is none, because it is set implicitly by any raise that
+        # happens while another exception is in flight — teardown inside an
+        # `except` block, an anyio task group's __exit__ — so it routinely
+        # points at something unrelated to the failure being reported.
+        # `raise ... from None` (__suppress_context__) is honored as the
+        # explicit "that context is noise" it is. Context-derived leaves are
+        # also ranked below direct ones in the selection below, so a real
+        # failure still wins over a cleanup bystander.
+        if current.__cause__ is not None:
+            children.append((current.__cause__, via_context))
+        elif (current.__context__ is not None
+                and not current.__suppress_context__):
+            children.append((current.__context__, True))
+        if children:
+            stack.extend(reversed(children))  # LIFO: first child explored first
+        else:
+            leaves.append((current, via_context))
+    # Best answer first: a real failure reached without implicit chaining,
+    # then a real failure behind one, then whatever we have (all-cancellation
+    # groups still report a leaf rather than the useless group node).
+    for want_context in (False, True):
+        for leaf, via in leaves:
+            if via is want_context and not isinstance(leaf, asyncio.CancelledError):
+                return leaf
+    return leaves[0][0] if leaves else exc
+
+
+def _is_noninteractive(exc: BaseException) -> bool:
+    """True if NonInteractiveAuthRequired is anywhere in the exception tree.
+
+    The stdlib flow raises it bare, but a raise chained as __cause__ or
+    wrapped in a group must still read as "not logged in", not as a crash.
+    Same walk as the capture hooks use.
+    """
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, NonInteractiveAuthRequired):
+            return True
+        stack.extend(getattr(current, "exceptions", ()) or ())
+        for link in (current.__cause__, current.__context__):
+            if link is not None:
+                stack.append(link)
+    return False
+
+
+async def _run_with_onboarding(status_only: bool, force: bool, host: str | None) -> int:
+    if status_only:
+        return await _run(status_only, force)
+    completion = LoginCompletion(guide_url(default_url(), host))
+    context_token = active_completion.set(completion)
+    result = 1
+    try:
+        result = await _run(status_only, force)
+        return result
+    finally:
+        # _run returns success only AFTER MCP verification, following the flow's
+        # successful token exchange and atomic storage (or a verified cached key).
+        completion.finish(result == 0)
+        active_completion.reset(context_token)
+        if completion.callback_received:
+            # Flush the redirect/error response before the CLI process exits.
+            await asyncio.to_thread(completion.response_sent.wait, 3)
+        if result == 0 and completion.destination:
+            print(f"next steps  : {completion.destination}")
+        elif result != 0:
+            print("fix         : return to your coding agent and run MemHub login again")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Authenticate this MemHub plugin install.")
+    parser.add_argument("--status", action="store_true",
+                        help="report only; never opens a browser")
+    parser.add_argument("--force", action="store_true",
+                        help="discard the cached token and log in again")
+    parser.add_argument("--host", choices=HOSTS,
+                        help="coding agent that started login; omitted opens the guide chooser")
+    args = parser.parse_args()
+    if args.status and args.force:
+        parser.error("--status and --force are contradictory: --status must "
+                     "never open a browser, and --force exists to open one.")
+    return asyncio.run(_run_with_onboarding(args.status, args.force, args.host))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
