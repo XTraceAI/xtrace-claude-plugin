@@ -266,6 +266,21 @@ Once a day, `scripts/state_sweep.py` deletes stale capture and Markdown-capture
 files (after 7 days) and stale rulebook state (after 30).
 `python3 scripts/state_sweep.py --dry-run` shows what it would delete.
 
+### Strings that look like credential reads
+
+Three places contain text that reads like a command fetching a credential. None
+of them reads one:
+
+- `skills/start-rulebook/catalog.json` and the start-rulebook skill hold the
+  **"Never read secrets"** starter rule. Its test cases are the commands it
+  must stop, such as `printenv`, `env | sort` and `grep KEY .env`, and the
+  rule is replayed against them before it is filed. Nothing runs them.
+- `scripts/pr_link.py` parses shell commands that address GitHub so it can
+  find the pull request they name. It skips command wrappers like `env`,
+  `sudo` and `timeout` (`env -u DEBUG curl …`), so the word `env` sits beside
+  `api.github.com`. It reads no environment variable and sends nothing to
+  GitHub: the plugin's hooks never call GitHub (see Commands it starts).
+
 ## Configuration
 
 | Setting | Effect |
