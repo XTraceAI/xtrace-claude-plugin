@@ -1,0 +1,28 @@
+{
+  "name": "memhub",
+  "description": "Team memory for Claude Code. Your sessions are saved automatically, so past work is searchable later. Your team's rules show up while you work, at the moment they apply. Skills let you search what the team knows, save a document, import a session, hand work to a teammate, link sessions to pull requests, write rules, work from specs, and watch a pull request through review.",
+  "version": "0.109.0",
+  "license": "Apache-2.0",
+  "hooks": ["./hooks/claude-hooks.json"],
+  "author": {
+    "name": "XTrace",
+    "email": "felixmeng@xtrace.ai"
+  },
+  "homepage": "https://memhub.xtrace.ai",
+  "repository": "https://github.com/XTraceAI/xtrace-claude-plugin",
+  "keywords": [
+    "memory",
+    "memhub",
+    "xtrace",
+    "session-capture"
+  ],
+  "userConfig": {
+    "memhub_token": {
+      "type": "string",
+      "title": "MemHub access key (optional)",
+      "description": "Advanced: leave empty to use the access key /memhub:login stores. A MemHub personal access key (mhk_...) entered here is used by the plugin's hooks ahead of that stored key.",
+      "sensitive": true,
+      "required": false
+    }
+  }
+}

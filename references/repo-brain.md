@@ -1,0 +1,232 @@
+# The repo brain — naming, resolution, and creation rules
+
+The canonical rules for turning a git repository into its MemHub agent brain
+("the repo room"). Every skill that touches a repo brain follows this file.
+
+Each skill states the common-path rule inline, so the normal case costs no
+read. Come here for the edge cases and for the rules that apply whenever a
+skill is about to CREATE a brain.
+
+---
+
+## 1. The name
+
+```
+Repo: <org>/<name>
+```
+
+Derived from `git remote get-url origin`. This name is a **lookup key** — a
+brain is found by matching it EXACTLY, so every skill must derive it
+identically. A one-character difference silently creates a second brain for
+the same repo, and the two rooms never see each other's memory.
+
+Normalization, in order:
+
+1. Read `git remote get-url origin`.
+2. Strip the transport and host. Both remote forms must produce the same
+   result:
+   - HTTPS — `https://github.com/XTraceAI/xmem.git` → `XTraceAI/xmem`
+   - SSH — `git@github.com:XTraceAI/xmem.git` → `XTraceAI/xmem`
+   - SSH URL — `ssh://git@github.com/XTraceAI/xmem.git` → `XTraceAI/xmem`
+3. Strip a trailing `.git` and any trailing `/`.
+4. Keep only the last two path segments (`<org>/<name>`). Self-hosted hosts
+   can nest deeper (e.g. `gitlab.example.com/group/subgroup/repo`) — take
+   `subgroup/repo`.
+5. **Preserve case exactly as the remote gives it.** Do not lowercase.
+   `XTraceAI/xmem` and `xtraceai/xmem` are different brains; the remote is
+   the tiebreaker.
+6. Prefix with `Repo: ` (one space).
+
+Result: `Repo: XTraceAI/xmem`.
+
+**A remote with no org** (`git@host:name.git`, common on self-hosted servers)
+yields a one-segment `Repo: name`. Keep it — the remote is still stable across
+clones and worktrees, which is the property the key needs. Do NOT substitute
+the no-remote fallback below: that keys on a local directory basename, which
+differs between clones and would split the room. Note the resulting name is
+shaped like the no-remote form, so a no-remote repo whose directory happens to
+share that basename lands in the same room; prefer `room_map.py name` over
+deriving by hand so every caller at least agrees.
+
+## 2. Edge cases
+
+**Worktrees and subdirectories.** All worktrees of a repo, and any
+subdirectory within it, resolve to the SAME brain — because `origin` is the
+same. Never derive the name from the current directory when a remote exists.
+This is why the remote, not the path, is the source of truth. The no-remote
+fallback below preserves this guarantee by keying on the main worktree rather
+than the current one.
+
+**Monorepos.** One repo is one brain. Do not invent per-package brains; the
+package is a detail inside the room, not a room of its own.
+
+**Multiple remotes.** Use `origin`. If `origin` is missing but other remotes
+exist, do NOT guess which is canonical — ask the user which remote to use,
+or apply the no-remote rule below if they don't care.
+
+**No remote, but inside a git repo.** Derive from the MAIN worktree, never
+from the current directory — in a linked worktree `git rev-parse
+--show-toplevel` returns *that worktree's* path, so every worktree of one
+repo would get a different name:
+
+```sh
+git rev-parse --path-format=absolute --git-common-dir   # → /path/to/repo/.git
+```
+
+Do NOT blindly take the parent directory — that only works for the standard
+layout. Normalize: if the last path component is exactly `.git`, drop it;
+then strip a trailing `.git` extension from what remains; then take the
+basename.
+
+```
+/path/to/repo/.git   → /path/to/repo   → repo    (standard worktree)
+/path/to/repo.git    → /path/to/repo   → repo    (bare repo)
+/path/to/repo        → /path/to/repo   → repo    (custom GIT_DIR)
+```
+
+Taking the parent unconditionally would name the brain after the CONTAINING
+directory in the latter two cases — a wrong lookup key, which mints an
+unfindable room.
+
+```
+Repo: <basename>
+```
+
+**This name can never match a remote-derived `Repo: <org>/<name>`** — it has
+one segment where that has two, and there is no way to recover the org
+without a remote. So it is a genuinely DISTINCT brain, not the same room
+under a shorter name. Say so out loud and confirm before creating one: if the
+repo has a remote anywhere else (a teammate's clone, CI), their room is the
+two-segment one, and creating this would fork the repo's memory in exactly
+the way §1 warns about.
+
+**Not a git repository at all.** Do NOT invent a repo name. Fall back to
+plain workspace memory (omit `agent_brain_id` entirely), and **tell the user
+that's what happened** — e.g. "not in a git repo, so this went to your
+workspace memory rather than a repo brain." Silently inventing a brain name
+here is how unfindable one-off brains get created. MemHub is used outside
+code repos (meetings, documents, research); that path is legitimate and must
+not be forced into a repo shape.
+
+## 3. Resolve before you create — ALWAYS
+
+Creating a brain is the last resort, never the first move.
+
+1. Derive the name (§1).
+2. `list_agent_brains(repo="<org>/<name>")` — the §1 name without the
+   `Repo: ` prefix; it looks across every org you are in — then keep only an
+   **exact-name match**. Reuse that `agent_brain_id` if found — a teammate
+   may have created the room, and theirs is the right one.
+3. *Optional*, when a person is in the loop to judge a near-match: run
+   `list_agent_brains(query="…")` with the repo or topic in natural language
+   — it ranks brains, and an existing one may hold this subject under a
+   different name. The skills that resolve a repo room (onboard, pr-babysit)
+   skip it: the exact name is the dedup that matters.
+4. No exact match: `create_agent_brain` with `name: "Repo: <org>/<name>"`,
+   `category: "repo"`, a description (§5), and **`repo: "<org>/<name>"`** —
+   the §1 name without the `Repo: ` prefix. Omit `workspace_id`. `repo` ties
+   the brain to the repository on the server: when the org has granted that
+   GitHub repo to a workspace, the brain is bound there (and the grant
+   already auto-created a `Repo: <org>/<name>` brain, so there is usually one
+   to find); when it has not, the brain is created unbound (`repo.bound:
+   false`) and **the server does not refuse a second one** — step 2's
+   exact-name match is the only guard. A later grant adopts the unbound brain
+   only when it is the ONLY one for that repo; with two, it adopts neither and
+   creates a third. Read the error
+   **message** — the tool passes back text, not a reason code:
+   - `Repo brain already exists: <name> (<id>)` → the repo's bound brain
+     exists but you could not see it in step 2. Reuse the id in the
+     parentheses; do not create another. (Not visible usually means not
+     shared with you — if a write to it is refused, ask for it to be shared.)
+   - `Repo brain governance requires an org admin` → the repo is granted and
+     only an org admin may create its brain. Retry the same call **without**
+     `repo`, and tell the user an admin-owned brain for this repo exists
+     that an admin can share with them.
+   - `Use a GitHub URL or owner/repo` / `Use a repository name or owner/repo`
+     → the server could not parse the name (rare); retry without `repo`.
+
+   Omitting `workspace_id` lands an unbound brain in your own workspace, so
+   you keep the contributor access that sharing requires; a bound brain
+   lands in the grant's workspace, and you still hold it as its creator.
+
+Duplicate brains are the main way a MemHub org degrades: cross-brain routing
+ranks brains by their overview, so several near-identical rooms on one
+subject make the right one harder to find for every future search.
+
+## 4. Cache the resolution — resolve once, route from then on
+
+Once §3 gives you an id, **persist it** so later writers don't redo the lookup:
+
+```sh
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/room_map.py" set --brain-id "<ROOM>" [--org-id "<ORG_ID>"]
+```
+
+`--org-id` is the org that owns the brain, when you know it — the brain row
+or `create_agent_brain`'s answer names it. It is optional: the server works a
+brain's org out from its id, so an id cached without its org still routes.
+An entry cached without it is re-probed (rate-limited, once a day) in case
+the org can be recorded.
+
+That writes `~/.config/memhub-plugin/rooms.json` — the plugin's per-user state
+dir, alongside the OAuth token cache. **Never inside the repo.** A brain id is
+account state, not project state: writing it into the working tree would push a
+private id into whatever repo the user happens to be in, including public ones,
+and force every user to decide whether to commit it.
+
+Entries are keyed by the repo's room name (§1), then by backend (`production` /
+`staging` hold different ids for the same repo, so a single flat id would write
+to the wrong brain on whichever install didn't match).
+
+Read it back — bare id on stdout, exit 1 and silence when nothing is cached:
+
+```sh
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/room_map.py" show
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/room_map.py" name   # the §1 name
+```
+
+Who reads it: the ARTIFACT writers. `save_artifact.py` and the `.md`
+auto-capture at the end of a turn resolve the room themselves on a cache miss
+(`brain_resolve.resolve_repo_brain` asks `list_agent_brains(repo=…)`, keeps
+the exact-name match, and caches the answer), and a write the backend answers "Agent brain not found" for evicts
+the entry so the next one resolves again. `save_artifact.py` reads the cache
+when `--agent-brain-id` is not passed (`--no-room` opts out), so a plain
+invocation lands in the room. The cache makes that resolution a once-per-repo
+cost, records the org that owns the room when it is known (`set --org-id`),
+and collapses five skills' worth of
+independent re-derivation into one answer, which is the drift §1 warns about.
+
+Who never reads it: session capture. The per-turn Stop flush, the SessionEnd
+hook, the commit/PR flush, the Codex and Cursor hooks and `capture.py import`
+send every session to the author's **personal memory, never to a brain** —
+the room included. A session is the author's, and the server pins a session to
+the first brain any flush names, so a single routed flush would pull its whole
+memory into the room. Team-visible knowledge reaches the room as artifacts.
+
+Because the key is the room NAME (derived from the remote), every worktree and
+subdirectory of a repo shares one entry automatically, with no dependence on
+which branch is checked out. Each teammate resolves once on their own machine —
+one `list_agent_brains` call — which is the price of keeping the id out of the
+working tree.
+
+## 5. Every brain you create needs a real description
+
+`create_agent_brain` accepts a `description`. It is not decoration — it is
+the text an agent reads when choosing between brains, and a brain with no
+description is effectively invisible when picking from a list.
+
+Write one line answering **what questions this brain can answer**. Name the
+subject and the kind of content.
+
+- Good — "Shared room for the xmem repo: specs, design docs and PR review
+  records."
+- Useless — "xmem stuff", "notes", or an empty description.
+
+## 6. Say where things landed
+
+After any write, tell the user which brain received it, by name:
+
+> Saved to `Repo: XTraceAI/xmem`.
+
+Routing that happens silently reads as losing things. One line keeps
+automatic placement trustworthy, and lets the user correct a wrong
+destination immediately rather than discovering it weeks later.
