@@ -3,9 +3,11 @@
   "description": "Team memory for Claude Code. Your sessions are saved automatically, so past work is searchable later. Your team's rules show up while you work, at the moment they apply. Skills let you search what the team knows, save a document, import a session, hand work to a teammate, link sessions to pull requests, write rules, work from specs, and watch a pull request through review.",
   "version": "0.110.0",
   "license": "Apache-2.0",
-  "hooks": ["./hooks/claude-hooks.json"],
+  "hooks": [
+    "./hooks/claude-hooks.json"
+  ],
   "author": {
-    "name": "XTrace",
+    "name": "MemHub",
     "email": "felixmeng@xtrace.ai"
   },
   "homepage": "https://memhub.xtrace.ai",

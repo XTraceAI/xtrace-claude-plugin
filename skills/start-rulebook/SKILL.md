@@ -296,7 +296,7 @@ Three things to know before reading a number off that replay:
 
 - **What the replay covers.** Bash commands, edits, tool output, and reads —
   both the Read tool's path and every file a Bash call would print
-  (`cat .env`), through the hook's own parser. `anchor_recall` and
+  (`cat config.yml`), through the hook's own parser. `anchor_recall` and
   `session_context` rows are never replayed (the server judges those), so
   they carry no number at all: say "not measurable here", never "0".
 - **A rule with a `given` block or `scope_paths` is replayed WITHOUT them**
@@ -419,18 +419,18 @@ enforced by <what>" in the report). For each rule pick ONE delivery, hook
 lanes first (table above), and write a `create_rule` body into a JSON list:
 
 ```json
-[{"title": "dotenv-not-source",
+[{"title": "no-force-push",
   "delivery": "agent_hook",
-  "matcher": {"event": "bash", "command_rx": "(^|[;&|(]\\s*)(source|\\.)\\s+\\S*\\.env\\b",
-              "command_not_rx": "python3?\\s+-c\\b|\\brulebook\\b", "warn_once_per": "session"},
-  "claude_md": {"heading": "Loading environment variables", "text": "`source .env` will mis-parse it and leak secrets into stderr. Always load it via python-dotenv."},
-  "did": "Claude sourced .env", "what": "Claude is warned at `source .env` and pointed to python-dotenv",
-  "when": "Claude is about to load a .env file into the shell by sourcing it.",
-  "do": "Load it via python-dotenv; never source it.",
-  "why": "Sourcing .env mis-parses it and leaks secrets into stderr.",
-  "quote_rx": "\\.env|secret|dotenv",
+  "matcher": {"event": "bash", "command_rx": "\\bgit\\s+push\\b[^;&|]*\\s(--force|-f)\\b",
+              "command_not_rx": "--force-with-lease", "warn_once_per": "session"},
+  "claude_md": {"heading": "Pushing", "text": "Never force-push a shared branch; use --force-with-lease on your own."},
+  "did": "Claude force-pushed", "what": "Claude is warned at `git push --force` and pointed to --force-with-lease",
+  "when": "Claude is about to force-push a branch.",
+  "do": "Use --force-with-lease, and only on a branch only you push to.",
+  "why": "A plain force push can silently discard teammates' commits.",
+  "quote_rx": "force[- ]push|--force",
   "scope_repos": ["<repo>"], "source": "claude_md_import",
-  "source_ref": "CLAUDE.md@<sha>#loading-environment-variables"}]
+  "source_ref": "CLAUDE.md@<sha>#pushing"}]
 ```
 
 - `claude_md` is the origin sentence itself — pass it, don't make the

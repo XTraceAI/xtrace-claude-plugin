@@ -3052,13 +3052,13 @@
    "cases": {
     "fires": [
      {
-      "case": "psql $DATABASE_URL -c 'select 1'",
+      "case": "psql -h localhost -d app -c 'select 1'",
       "agent_main": false
      }
     ],
     "silent": [
      {
-      "case": "psql $DATABASE_URL -c 'select 1'",
+      "case": "psql -h localhost -d app -c 'select 1'",
       "agent_main": true
      },
      {

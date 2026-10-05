@@ -120,8 +120,16 @@ _GIT_KEEP = {"PATH", "HOME", "SYSTEMROOT", "SYSTEMDRIVE", "USERPROFILE",
 
 def git_env() -> dict[str, str]:
     """The minimal environment for a read-only git probe."""
-    # Named keys only, looked up one by one: never a copy of the environment.
-    env = {k: os.environ[k] for k in sorted(_GIT_KEEP) if k in os.environ}
+    # Named keys only, each spelled out: never a copy of the environment.
+    kept = {"PATH": os.environ.get("PATH"), "HOME": os.environ.get("HOME"),
+            "SYSTEMROOT": os.environ.get("SYSTEMROOT"),
+            "SYSTEMDRIVE": os.environ.get("SYSTEMDRIVE"),
+            "USERPROFILE": os.environ.get("USERPROFILE"),
+            "PATHEXT": os.environ.get("PATHEXT"), "COMSPEC": os.environ.get("COMSPEC"),
+            "TEMP": os.environ.get("TEMP"), "TMP": os.environ.get("TMP"),
+            "TMPDIR": os.environ.get("TMPDIR")}
+    assert set(kept) == _GIT_KEEP
+    env = {k: v for k, v in kept.items() if v is not None}
     env.update({
         "GIT_CONFIG_NOSYSTEM": "1",     # ignore /etc/gitconfig
         # NB: global config (~/.gitconfig) is deliberately KEPT. It carries
