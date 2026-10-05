@@ -1,7 +1,7 @@
 ---
 description: Use when the user wants to know which coding sessions actually wrote their pull requests, and to link them in MemHub (e.g. "/memhub:find-contributing-sessions", "map my unlinked PRs to sessions", "find the sessions behind my PRs", "which sessions wrote this PR", "link the sessions that built PR 42"). With no argument it lists the user's own PRs that have no confirmed session link; `--pr URL` (repeatable) names specific ones. Scans THIS MACHINE's local session history (Claude Code, Codex, Cursor) once for all of them, ranks the candidates per PR by the evidence that matched, and links only the ones you approve.
 argument-hint: "[pr-number-or-url] [--pr <url-or-number>]..."
-allowed-tools: Bash, AskUserQuestion, mcp__plugin_memhub_memhub__list_my_unlinked_prs, mcp__plugin_memhub-staging_memhub__list_my_unlinked_prs, mcp__plugin_memhub_memhub__link_pr, mcp__plugin_memhub-staging_memhub__link_pr, mcp__plugin_memhub_memhub__unlink_pr, mcp__plugin_memhub-staging_memhub__unlink_pr, mcp__plugin_memhub_memhub__list_orgs, mcp__plugin_memhub-staging_memhub__list_orgs
+allowed-tools: 'Bash(gh pr view *), Bash(gh repo view *), Bash(gh search prs *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/skills/find-contributing-sessions/scripts/find_sessions.py" *), AskUserQuestion, mcp__plugin_memhub_memhub__list_my_unlinked_prs, mcp__plugin_memhub-staging_memhub__list_my_unlinked_prs, mcp__plugin_memhub_memhub__link_pr, mcp__plugin_memhub-staging_memhub__link_pr, mcp__plugin_memhub_memhub__unlink_pr, mcp__plugin_memhub-staging_memhub__unlink_pr, mcp__plugin_memhub_memhub__list_orgs, mcp__plugin_memhub-staging_memhub__list_orgs'
 ---
 
 **Plugin root:** Resolve this skill's plugin root once: it is the ancestor of

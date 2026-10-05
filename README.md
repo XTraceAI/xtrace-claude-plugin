@@ -205,25 +205,6 @@ background fork of itself. The fork files a **proposed** rule with
 `~/.config/memhub-plugin/harness/stop.log`, one line per Stop, with no prompt
 text.
 
-### Companion (Claude Code 2.1.287+)
-
-`companion/register.ts` is a Claude Code mod (a function-hook module, loaded
-through `hooks/hooks.json`). Mods ship in Claude Code 2.1.287 and load with
-the plugin where Anthropic's server-side rollout of mods has reached the
-account; nothing on the machine turns that on. `/<animal> off` hides it. It writes nothing to `~/.claude/settings.json`. The
-module draws an animal above the prompt and reacts to session, turn, prompt
-and tool events, including rule fires. It saves its preferences in Claude
-Code's plugin store. It starts
-these processes:
-
-- `python3 scripts/rule_decide.py proposed --session <id>` after each Stop, to
-  list rules proposed from this session;
-- `python3 scripts/rule_decide.py <rule_id> activate|reject` when you press
-  Activate or Reject. This sends a `PATCH` to `/v1/team/rulebook/rules/<id>`
-  with your access key;
-- `python3 scripts/rule_decide.py url …` and `open` or `xdg-open`, to open a
-  rule in MemHub Studio (`https://mem.xtrace.ai`) when you click it.
-
 ### Network destinations
 
 - `https://api.memhub.xtrace.ai`: the MCP server (`/mcp-server/mcp`) and REST
@@ -257,7 +238,7 @@ commands the agent runs, for example in `/memhub:pr-babysit` or
 - `git` runs read-only queries, such as `remote get-url`, `rev-parse`,
   `status`, `diff`, `log` and `worktree list`. These identify the repository, find changed
   Markdown files and evaluate rules.
-- `open` or `xdg-open` (companion only) and your browser open pages. The
+- Your browser opens pages. The
   browser opens for `/memhub:login`, and for the `save-artifact`, `onboard`
   and `import-session` scripts when they find no stored access key.
 - The plugin's hooks never run `gh`. Skills such as `pr-babysit`, `link-pr`,

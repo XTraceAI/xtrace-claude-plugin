@@ -1,7 +1,7 @@
 ---
 description: Use when the user asks to import, upload, or save a Claude Code, Codex, or Cursor session/conversation/transcript into MemHub or team memory (e.g. "import this session into memhub", "save session abc123 to memhub", "put that conversation in an agent brain"). Ships the transcript via a terminal upload script — any size, no token-by-token re-emit.
 argument-hint: "<session-id-or-path> [title...]"
-allowed-tools: Bash, mcp__plugin_memhub_memhub__list_orgs, mcp__plugin_memhub-staging_memhub__list_orgs
+allowed-tools: 'Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/capture.py" import *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/capture.py" list *), mcp__plugin_memhub_memhub__list_orgs, mcp__plugin_memhub-staging_memhub__list_orgs'
 ---
 
 **Plugin root:** Resolve this skill's plugin root once: it is the ancestor of

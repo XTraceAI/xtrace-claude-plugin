@@ -1,7 +1,7 @@
 ---
 description: Use when the user wants to link a coding session to a GitHub pull request in MemHub, or to undo such a link (e.g. "link this session to PR 42", "/memhub:link-pr", "attach my work to this PR", "unlink that session from the PR"). Records the link as confirmed, so the PR's session context is published from facts rather than a branch-name guess.
 argument-hint: "[pr-number-or-url] [--session <id>...] [--unlink]"
-allowed-tools: Bash, mcp__plugin_memhub_memhub__link_pr, mcp__plugin_memhub-staging_memhub__link_pr, mcp__plugin_memhub_memhub__unlink_pr, mcp__plugin_memhub-staging_memhub__unlink_pr, mcp__plugin_memhub_memhub__list_orgs, mcp__plugin_memhub-staging_memhub__list_orgs
+allowed-tools: 'Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/capture.py" current *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/capture.py" list *), Bash(gh pr view *), mcp__plugin_memhub_memhub__link_pr, mcp__plugin_memhub-staging_memhub__link_pr, mcp__plugin_memhub_memhub__unlink_pr, mcp__plugin_memhub-staging_memhub__unlink_pr, mcp__plugin_memhub_memhub__list_orgs, mcp__plugin_memhub-staging_memhub__list_orgs'
 ---
 
 **Plugin root:** Resolve this skill's plugin root once: it is the ancestor of

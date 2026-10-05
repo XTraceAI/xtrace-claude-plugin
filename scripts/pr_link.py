@@ -1519,7 +1519,7 @@ def _negative_ttl_s() -> float:
     The module constant is the fallback, so a test that monkeypatches
     ``NEGATIVE_TTL_S`` still steers this.
     """
-    raw = os.environ.get(NEGATIVE_TTL_ENV, "").strip()
+    raw = os.environ.get("MEMHUB_PRLINK_NEGATIVE_TTL_S", "").strip()  # NEGATIVE_TTL_ENV
     if not raw:
         return float(NEGATIVE_TTL_S)
     try:

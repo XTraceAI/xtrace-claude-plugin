@@ -1,7 +1,7 @@
 ---
 name: setup
 description: Use when the user asks to set up, repair, or verify the installed MemHub host integration, especially Codex automatic capture, PreToolUse team rules, hook installation, or capture health. Installs the Codex user-hooks compatibility bridge idempotently while preserving unrelated hooks, then checks plugin authentication and reports the one required trust step.
-allowed-tools: Bash
+allowed-tools: 'Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup_codex_hooks.py" *), Bash(CLAUDE_PLUGIN_ROOT=* python3 "${CLAUDE_PLUGIN_ROOT}/scripts/login.py" --status), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/capture_health.py" *), Bash(CLAUDE_PLUGIN_ROOT=* python3 "${CLAUDE_PLUGIN_ROOT}/scripts/capture_health.py"), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup_codex_hooks.py *), Bash(CLAUDE_PLUGIN_ROOT=* python3 ${CLAUDE_PLUGIN_ROOT}/scripts/login.py --status), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/capture_health.py *), Bash(CLAUDE_PLUGIN_ROOT=* python3 ${CLAUDE_PLUGIN_ROOT}/scripts/capture_health.py)'
 ---
 
 Set up the installed MemHub plugin's host integration. This skill configures

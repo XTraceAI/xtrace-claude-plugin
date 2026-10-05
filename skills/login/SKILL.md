@@ -1,7 +1,7 @@
 ---
 description: Use when the user wants to authenticate or re-authenticate the MemHub plugin, or when memory capture is not working because of auth (e.g. "log in to memhub", "memhub login", "authenticate memhub", "memhub says I'm not authenticated", "my sessions aren't being saved", "capture stopped working", "re-auth memhub"). Provisions the plugin's own access key — which on Claude Code also authenticates the memhub MCP tools, but is separate from any /mcp connector login — and verifies it works.
 argument-hint: "[--status | --force] [--host cursor|claude-code|codex]"
-allowed-tools: Bash
+allowed-tools: 'Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/login.py" *)'
 ---
 
 **Plugin root:** commands below use `${CLAUDE_PLUGIN_ROOT}`. Claude Code and
