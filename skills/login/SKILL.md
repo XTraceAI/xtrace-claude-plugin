@@ -50,8 +50,13 @@ coding host you are actually running in. This is an explicit integration value,
 not a guess from the user's browser or user-agent. If the host is unknown, omit
 `--host`; the result links to a host chooser. Never pass an arbitrary URL.
 
-The command opens a browser tab on the first run. Tell the user to expect it and
-to complete the approval; it waits up to 5 minutes.
+On the first run the command prints a sign-in code and a link, and tries to open
+that link in a browser tab. Before it finishes, tell the user to open the link
+(the tab may not appear), check that the page shows the same code, and approve.
+It waits up to 5 minutes. This is a device-code sign-in: nothing listens on a
+local port, so a busy callback port, a container or an SSH session does not
+break it. Only a server that does not offer device codes falls back to the
+browser callback.
 
 ## What it actually provisions
 

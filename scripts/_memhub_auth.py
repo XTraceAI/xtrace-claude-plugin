@@ -66,7 +66,10 @@ from urllib.parse import parse_qs, urlparse
 # functions that send something. Hooks import this file on every invocation,
 # several of them synchronously, and most only need a bearer string.
 
-_CACHE_DIR = Path.home() / ".config" / "memhub-plugin"
+# $MEMHUB_CONFIG_DIR moves the credentials (token cache, access key) so a
+# harness can sign in fresh without touching this machine's real key.
+_CACHE_DIR = Path(os.environ.get("MEMHUB_CONFIG_DIR")
+                  or Path.home() / ".config" / "memhub-plugin")
 
 # The ``memhub_token`` userConfig option in ``.claude-plugin/plugin.json``.
 # Claude Code keeps the value (sensitive) in its secure store and exports it to
@@ -270,10 +273,26 @@ class OAuthFlow:
         import atomic_write  # noqa: PLC0415 — stdlib, beside this file
         import mcp_http  # noqa: PLC0415
 
-        token = await mcp_http.oauth_authorize(
-            self.url, self.client_id, self.redirect_uri,
-            self.redirect_handler, _make_callback_handler(self.port),
-            www_authenticate=www_authenticate)
+        token = None
+        # The device code first: it needs no localhost callback, so a busy
+        # callback port (an /mcp sign-in mid-flow, a second login), a container
+        # or an SSH session cannot break it. The browser flow stays as the
+        # fallback for a server that does not offer the grant.
+        if os.environ.get("MEMHUB_LOGIN_FLOW", "").strip().lower() != "browser":
+            discovery = mcp_http.discover_oauth(
+                self.url, www_authenticate or mcp_http.auth_challenge(self.url))
+            try:
+                token = await mcp_http.oauth_device_authorize(
+                    self.url, self.client_id, _show_device_code,
+                    discovery=discovery,
+                    approval_timeout=float(os.environ.get("MEMHUB_OAUTH_TIMEOUT", "300")))
+            except mcp_http.DeviceFlowUnavailable:
+                token = None
+        if token is None:
+            token = await mcp_http.oauth_authorize(
+                self.url, self.client_id, self.redirect_uri,
+                self.redirect_handler, _make_callback_handler(self.port),
+                www_authenticate=www_authenticate)
         # Same writer as every other credential here: atomic and created 0600,
         # so a hook reading concurrently never catches it half-written.
         atomic_write.publish(token_cache_path(self.url),
@@ -283,6 +302,18 @@ class OAuthFlow:
     async def bearer(self) -> str:
         """The cached access token, else a fresh one from the browser flow."""
         return _cached_access_token(self.url) or await self.authorize()
+
+
+def _show_device_code(page: str | None, user_code: str) -> None:
+    """Open the approval page with the code filled in, and print the code.
+
+    The page asks the person to confirm the code matches; the printed line is
+    what they compare it with, and what they type on another device when this
+    one has no browser."""
+    print(f"Sign in to MemHub: confirm the code {user_code} in your browser.\n  {page}",
+          flush=True)
+    if page:
+        webbrowser.open(page)
 
 
 def build_oauth(url: str, interactive: bool = True) -> OAuthFlow:

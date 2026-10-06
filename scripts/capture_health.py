@@ -41,7 +41,10 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-CACHE_DIR = Path.home() / ".config" / "memhub-plugin"
+# $MEMHUB_CONFIG_DIR moves the credentials (token cache, access key) so a
+# harness can sign in fresh without touching this machine's real key.
+CACHE_DIR = Path(os.environ.get("MEMHUB_CONFIG_DIR")
+                 or Path.home() / ".config" / "memhub-plugin")
 # Claude's flush state. `--host codex` switches to codex_flush's directory:
 # the two writers keep the same last_error / last_error_at / last_ok_at shape,
 # so everything below reads either one unchanged.
