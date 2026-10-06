@@ -36,7 +36,8 @@ Then, from the repository you want to connect:
 
 Requirements: `python3` 3.9 or newer and `git`. The hooks and the skills'
 scripts use only the Python standard library, so nothing else is installed:
-skills run them as `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py"`.
+skills run them as `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py"` or
+`python3 "${CLAUDE_PLUGIN_ROOT}/skills/<skill>/scripts/<script>.py"`.
 
 ## Authentication
 
@@ -46,17 +47,21 @@ There are two credentials, and setting up one does not set up the other.
   `https://api.memhub.xtrace.ai/mcp-server/mcp`. Its OAuth login uses the
   Auth0 tenant `memhub-prod.us.auth0.com`, with a browser redirect to
   `localhost:8765`. On Claude Code, the server's `headersHelper`
-  (`scripts/mcp_headers.py`) sends the access key from `/memhub:login` as the
-  `Authorization` header. Before it does, it checks the key against the server
-  with one request per connect. So after `/memhub:login` the tools work
-  without a separate `/mcp` login. If there is no key, the helper prints no
-  header, and **Authenticate** under `/mcp` applies.
+  (`scripts/mcp_headers.py`) sends the credential from `/memhub:login` (the
+  stored access key, else the plugin's cached OAuth token) as the
+  `Authorization` header. Before it does, it checks the credential against
+  the server with one request per connect. So after `/memhub:login` the tools
+  work without a separate `/mcp` login. If there is no credential, or the
+  server refuses it, the helper prints no header, and **Authenticate** under
+  `/mcp` applies.
 - **Hooks (`/memhub:login`).** This opens the browser once for the same Auth0
   login. It then mints a personal access key (`mhk_…`). The key is scoped to
   `memory:read` and `memory:write`, expires after 90 days, and is labelled
   `claude-code-<hostname>`. It is stored at
   `~/.config/memhub-plugin/pak-<api-host>.json`. Hooks are background
-  processes that cannot open a browser, so they rely on this key.
+  processes that cannot open a browser, so they rely on this key. When the
+  login succeeds, the local callback page sends your browser on to MemHub's
+  setup guide under `https://mem.xtrace.ai/plugin`.
 
 **Optional `memhub_token` setting.** The plugin declares one `userConfig`
 option, `memhub_token`. It is a masked field, it is not required, and it has
@@ -76,6 +81,25 @@ Hooks use the first credential they find, in this order:
 The option doesn't reach the MCP tools, because Claude Code doesn't give it
 to the `headersHelper`. Skill scripts that run through
 the Bash tool don't see the option either.
+
+## Skills
+
+Each skill runs as `/memhub:<name>`, or when you ask for it in plain words.
+
+| Skill | What it does, reads and sends |
+| --- | --- |
+| `login` | Signs the plugin in and stores its access key (see Authentication). |
+| `onboard` | Creates or reuses the repository's agent brain and records it in `rooms.json`. Lists the repository's tracked Markdown files (`git ls-files`) and uploads the ones that look important to that brain without asking. Folders or files you name replace that choice. |
+| `save-artifact` | Uploads a file you name as an artifact, to the repository's brain when there is one, else to your personal memory. |
+| `import-session` | Reads a past Claude Code, Codex or Cursor transcript from this machine and uploads it to your personal memory, in chunks when it is large. |
+| `search-memory` | Read-only search of the brain and your memory through the MCP tools. |
+| `handoff-session` | Writes a handoff brief as an artifact into an agent brain shared with the teammates you name, and creates and shares that brain when there is none. The session itself is not shared. |
+| `link-pr` | Links or unlinks a session and a pull request in MemHub. Asks the agent to run `gh pr view`. |
+| `find-contributing-sessions` | Reads this machine's Claude Code, Codex and Cursor session history to find the sessions behind your pull requests. Its script runs `gh pr view` and `gh api` for each PR's files. It prints paths, branches and commit ids, never transcript content, and links only the sessions you approve. |
+| `pr-babysit` | Polls a pull request's review bots and CI with `gh`. The agent fixes findings, commits, pushes and replies on review threads. Once the PR is clean, it saves a review record to the repository's brain. The `pr_babysit_trigger` hook asks the agent to start it after `gh pr create`. |
+| `create-rule` | Drafts a team rule, replays it over this machine's sessions, and files it as `proposed` with `create_rule`. |
+| `start-rulebook` | Fills starter rules in from a scan of the repository. If you choose, it also mines rules from your CLAUDE.md, the last 30 days of Claude Code, Codex and Cursor sessions on this machine, and Claude Code `/insights` facets. Working files go to a temp directory or `mine-out/` in the current directory. It files rules as `proposed` and never activates one. |
+| `spec`, `spec-work`, `spec-check`, `spec-maintain` | Spec-driven work against Git specs or brain documents. A `--cloud` bootstrap runs on the MemHub backend. |
 
 ## What it runs, sends, and fetches
 
@@ -104,10 +128,10 @@ the plugin folder when you run these hooks in another host.
 | PostToolUse (`Edit`, `MultiEdit`, `Write`, `NotebookEdit`) | `artifact_sync_reminder` | If the edited file belongs to a spec in the repository (by spec frontmatter), reminds the agent once per session. | No |
 | PostToolUse (`Bash`) | `pr_babysit_trigger` | After a successful `gh pr create`, tells the agent to start a `/memhub:pr-babysit` loop on the new PR. | No |
 | PostToolUse (`Edit`, `MultiEdit`, `Write`, `Bash`) | `md_capture` | Records which Markdown files the session wrote, or for Bash the working directory, in a local state file. | No |
-| PostToolUse (`Bash`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `Read`) | `rulebook_hook post` | Rule advisories on failed results, plus tracking for ordering rules. | Yes, see [Rulebook](#rulebook) |
+| PostToolUse (`Bash`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `Read`) | `rulebook_hook post` | Rule advisories on failed results and on files a Bash call wrote, plus tracking for ordering rules. | Yes, see [Rulebook](#rulebook) |
 | PostToolUse (`Bash`, `mcp__*github*__*`) | `pr_link_trigger` | When a GitHub call's output names exactly one pull request, asks MemHub whether to link this session to it. It may then tell the agent to call the `link_pr` tool. | Yes, the PR URL |
 | SessionStart | `capture_health` | Warns you when capture is unauthenticated or recently failed. Checks plugin compatibility with MemHub and whether a newer release exists. | Yes, see [Network destinations](#network-destinations) |
-| SessionStart | `brain_brief brief` | Gives the agent a short map of the repository's agent brain from a local cache. Starts a detached process that refreshes that cache. | The detached process does |
+| SessionStart | `brain_brief brief` | Gives the agent a short map of the repository's agent brain from a local cache. Starts a detached process that refreshes its recall pointers. | The detached process does |
 | SessionStart | `rulebook_hook session` | Loads your team rules into the session. Fetches them first if the cache is stale. | Yes, the repository name |
 | SessionStart | `harness_stop session` | Only when `MEMHUB_HARNESS_EXTRACT` is on. See [Flagged off](#flagged-off-harness-tied-rule-drafting). | No |
 | UserPromptSubmit | `brain_brief prompt` | Delivers brain pointers the session-start brief didn't have yet. | No |
@@ -115,7 +139,7 @@ the plugin folder when you run these hooks in another host.
 | Stop | `flush_turn` | Uploads the transcript bytes written since the last successful upload. Runs in the background. | Yes, the transcript |
 | Stop | `brain_brief refresh` | Refreshes the cached brain overview, at most every 6 hours. Runs in the background. | Yes, a brain id |
 | Stop | `md_capture_flush` | Saves qualifying Markdown files as draft artifacts. Runs in the background. See [Markdown capture](#markdown-capture). | Yes, file contents |
-| Stop | `rulebook_hook flush` | Uploads the rule-fire log. Once a day it also deletes stale local state. Runs in the background. | Yes, identifiers |
+| Stop | `rulebook_hook flush` | Uploads the rule-fire and rule-event logs. Once a day it also deletes stale local state. Runs in the background. | Yes, identifiers |
 | Stop | `harness_stop stop` | Only when `MEMHUB_HARNESS_EXTRACT` is on. | Yes, when on |
 | SessionEnd | `session_end` | Runs `flush_session.py` (re-sends the whole transcript as a backstop), then `rulebook_hook flush final`. Runs in the background. | Yes, the transcript |
 
@@ -123,9 +147,13 @@ the plugin folder when you run these hooks in another host.
 
 Sessions upload automatically through the `import_conversation` MCP tool,
 from the Stop, SessionEnd and commit/PR hooks above. They go to **your
-personal memory, never into a brain**. Before upload, the plugin removes
-MemHub keys (`mhk_…`, `xtk_…`) from the records. Nothing else is redacted. The
-server de-duplicates what it already has, so re-sending is safe.
+personal memory, never into a brain**. Each upload also carries the session's
+title, the repository name (the origin remote's basename) and any GitHub
+pull-request URLs that `gh pr create` printed in the session. Slash-command
+bookkeeping records are left out, and a tool result over 200,000 bytes is
+replaced by a note giving its size. Before upload, the plugin removes MemHub
+keys (`mhk_…`, `xtk_…`) from the records and the title. Nothing else is
+redacted. The server de-duplicates what it already has, so re-sending is safe.
 `MEMHUB_TURN_FLUSH=0` turns off per-turn capture. The commit/PR and SessionEnd
 uploads still run.
 
@@ -150,11 +178,14 @@ the OS temp directory. The `git status` search also skips ignored files,
 submodules, symlinks and paths outside the repository. At most five files are saved
 per turn, largest first. Content is redacted the same way as transcripts.
 Each save carries the `auto-captured` tag. It goes to the repository's agent
-brain when one is known (`~/.config/memhub-plugin/rooms.json`), otherwise to
-your personal memory. A file goes up again only when its content changes.
-There is no setting that turns this off on its own. `MEMHUB_TURN_FLUSH=0`
-does not affect it. To keep a file out, keep it below the size floor or in
-one of the excluded locations, or disable the plugin.
+brain when one is known (`~/.config/memhub-plugin/rooms.json`). When none is
+recorded, the plugin asks MemHub for a brain named after the origin remote's
+`<org>/<name>` and records the answer; a miss is asked again after a day. It
+never creates one. Without a brain, the file goes to your personal memory. A
+file goes up again only when its content changes. There is no setting that
+turns this off on its own. `MEMHUB_TURN_FLUSH=0` does not affect it. To keep a
+file out, keep it below the size floor or in one of the excluded locations, or
+disable the plugin.
 
 ### Rulebook
 
@@ -162,9 +193,12 @@ one of the excluded locations, or disable the plugin.
 
 - **fetch:** the repository name (the origin remote's basename, else the
   directory name).
-- **fires:** identifiers only: rule id, session, repo, branch, tool,
-  timestamps, and the judge's verdict. The matched excerpt stays in the local
-  log.
+- **fires and fire events:** rule id, session, repo, branch, tool, a hashed
+  checkout id, timestamps and the judge's verdict. Events record what followed
+  a fire: a command that satisfied it, a turn or session end, or a rule you
+  set aside. A fire on a call you overrode, and an event for a rule you set
+  aside, also carry the reason you gave (redacted, up to 2,000 characters).
+  The matched excerpt stays in the local log.
 - **recall:** for rules tied to files or commands, the file path or the
   command line. Heredoc bodies are dropped, credential-shaped values are
   redacted, and the text is cut to 400 characters. Set
@@ -178,7 +212,9 @@ one of the excluded locations, or disable the plugin.
 
 Every rule that fires is shown to you as `📏 Rule fired: …`, or `⛔️` when a
 gate blocked the call. The agent is told to repeat the same line. A blocked
-Bash call can be overridden with `RULEBOOK_OVERRIDE='<why>' <command>`.
+Bash call can be overridden with `RULEBOOK_OVERRIDE='<why>' <command>`, and a
+blocked edit with a `rulebook-override[<rule>]: <why>` line in the new
+content.
 `MEMHUB_RULEBOOK_FETCH=0` stops fetching rules, and the cached ones keep
 applying.
 
@@ -187,8 +223,9 @@ applying.
 `brain_brief.py` runs a detached `pointers` process. It searches the
 repository's brain and your sessions with identifiers taken from the branch:
 PR and ticket numbers, plus the basenames of files changed against the
-default branch and in the last 20 commits. The search goes through the
-`search_memory` tool. `MEMHUB_BRIEF_POINTERS=0` turns this off.
+default branch, left uncommitted, or changed in the last 20 commits. The
+search goes through the `search_memory` tool. `MEMHUB_BRIEF_POINTERS=0` turns
+this off.
 `pr_link_trigger.py` sends the pull request URL to
 `/v1/team/pr-links/check`. It caches a "not connected" answer for 30 minutes
 (`MEMHUB_PRLINK_NEGATIVE_TTL_S`).
@@ -208,11 +245,18 @@ text.
 ### Network destinations
 
 - `https://api.memhub.xtrace.ai`: the MCP server (`/mcp-server/mcp`) and REST
-  routes under `/v1/`. These cover rules, rule fires, the rule judge,
-  pr-links, harness classify, `/v1/plugin/compatibility` and `/v1/developer/access-tokens` (used only
-  by `/memhub:login`). Every request carries your credential and an
-  `X-MemHub-Plugin-Version` header. Redirects are not followed, and plain
-  `http` is refused.
+  routes under `/v1/`. These cover rules, rule recall, rule fires and fire
+  events, the rule judge, pr-links, harness classify,
+  `/v1/plugin/compatibility` and `/v1/developer/access-tokens` (used only by
+  `/memhub:login`). Every request carries your credential, except the OAuth
+  discovery requests `/memhub:login` sends before it has one. Plain `http` is
+  refused. Requests through the shared transport (`scripts/mcp_http.py`)
+  also carry an `X-MemHub-Plugin-Version` header and don't follow redirects.
+  The access-key calls (`scripts/pak.py`) carry no version header and use
+  Python's default URL opener, which follows a redirect on a GET.
+- `https://mem.xtrace.ai`: the plugin sends nothing here. After
+  `/memhub:login` succeeds, your browser is sent to the setup guide on this
+  site.
 - `https://memhub-prod.us.auth0.com`: OAuth login from `/memhub:login` and
   `/mcp`. Background hooks (capture flushes, the session brief, the rule
   judge) can also refresh a cached OAuth token here: a GET of the discovery
@@ -226,9 +270,10 @@ text.
   result is cached in `~/.config/memhub-plugin/releases/`.
 
 The plugin itself makes no other network calls. In particular, it makes no
-calls to the GitHub API. GitHub traffic comes only from the `gh` or `git`
-commands the agent runs, for example in `/memhub:pr-babysit` or
-`/memhub:link-pr`.
+calls to the GitHub API of its own. GitHub traffic comes only from `gh` and
+`git`: the commands the agent runs, for example in `/memhub:pr-babysit` or
+`/memhub:link-pr`, and the `gh pr view` and `gh api` calls the
+`find-contributing-sessions` script makes with your `gh` login.
 
 ### Commands it starts
 
@@ -236,13 +281,16 @@ commands the agent runs, for example in `/memhub:pr-babysit` or
   and the detached background refreshes (`rulebook_hook fetch`,
   `brain_brief pointers`).
 - `git` runs read-only queries, such as `remote get-url`, `rev-parse`,
-  `status`, `diff`, `log` and `worktree list`. These identify the repository, find changed
-  Markdown files and evaluate rules.
+  `status`, `diff`, `log`, `ls-files`, `merge-base` and `worktree list`. These
+  identify the repository, find changed Markdown files and evaluate rules.
 - Your browser opens pages. The
   browser opens for `/memhub:login`, and for the `save-artifact`, `onboard`
-  and `import-session` scripts when they find no stored access key.
-- The plugin's hooks never run `gh`. Skills such as `pr-babysit`, `link-pr`,
-  `find-contributing-sessions` and `create-rule` ask the agent to run `gh`.
+  and `import-session` scripts when they find no access key or usable cached
+  login.
+- The plugin's hooks never run `gh`. The `find-contributing-sessions` script
+  runs `gh pr view` and `gh api`. The `pr-babysit`, `link-pr` and
+  `find-contributing-sessions` skills ask the agent to run `gh`, and
+  `pr-babysit` also has it commit, push and reply on review threads.
 
 ### Local state
 
@@ -252,41 +300,48 @@ Everything lives under `~/.config/memhub-plugin/` unless noted:
 - `turnflush/`, `codexflush/`, `cursorflush/`: capture cursors, locks and the
   last error;
 - `mdcapture/`: Markdown capture bookkeeping;
-- `rulebook/`: cached rule books, per-session state, the fire log;
+- `rulebook/`: cached rule books, per-session state, the fire and event logs;
 - `overview/`: brain-brief caches;
 - `rooms.json`: which brain each repository maps to;
 - `prlink/`: the PR-link negative cache;
 - `compatibility/`, `releases/`: upgrade-check results;
 - `harness/stop.log`: only with `MEMHUB_HARNESS_EXTRACT` on;
+- `rules-from-sessions/`: what `/memhub:start-rulebook` noted about each
+  session it read, so it reads a session once;
 - `~/.claude/.memhub/directive_fired/`: what the brief already showed this
   session;
-- the OS temp directory: `memhub-…json` files for the spec reminder.
+- the OS temp directory: `memhub-spec-reminder-<session>.json` for the spec
+  reminder.
 
-Once a day, `scripts/state_sweep.py` deletes stale capture and Markdown-capture
-files (after 7 days) and stale rulebook state (after 30).
+Once a day, `scripts/state_sweep.py` deletes stale capture, Markdown-capture
+and brain-brief pointer files (after 7 days) and stale rulebook state (after
+30).
 `python3 scripts/state_sweep.py --dry-run` shows what it would delete.
 
 ### Strings that look like credential reads
 
-Three places contain text that reads like a command fetching a credential. None
-of them reads one:
+A few files contain text that resembles a command reading a credential. None of
+them reads one, and none of that text is ever run:
 
-- `skills/start-rulebook/catalog.json` and the start-rulebook skill hold the
-  **"Never read secrets"** starter rule. Its test cases are the commands it
-  must stop, such as `printenv`, `env | sort` and `grep KEY .env`, and the
-  rule is replayed against them before it is filed. Nothing runs them.
-- `scripts/pr_link.py` parses shell commands that address GitHub so it can
-  find the pull request they name. It skips command wrappers like `env`,
-  `sudo` and `timeout` (`env -u DEBUG curl …`), so the word `env` sits beside
-  `api.github.com`. It reads no environment variable and sends nothing to
-  GitHub: the plugin's hooks never call GitHub (see Commands it starts).
+- The start-rulebook skill and its catalog hold the **"Never read secrets"**
+  starter rule. Its test cases are, by design, the kinds of command it stops:
+  ones that print the shell environment or open dotenv files. The rule is
+  replayed against them as text before it is filed, and the session miner
+  replays recorded commands the same way.
+- The rulebook hook and the redaction module list credential patterns (API-key
+  flags, authorization headers, GitHub, AWS and MemHub key prefixes) so they can
+  strip matching values before anything is sent.
+- The PR-link parser reads shell commands that address GitHub to find the pull
+  request they name, skipping command wrappers such as the one that sets
+  variables for a single command. It reads no environment variable, and the
+  plugin's hooks never call GitHub (see Commands it starts).
 
 ## Configuration
 
 | Setting | Effect |
 | --- | --- |
 | `memhub_token` (userConfig) | Credential for hooks, ahead of everything else |
-| `MEMHUB_TURN_FLUSH=0` | Turns off per-turn capture |
+| `MEMHUB_TURN_FLUSH=0` | Turns off per-turn capture, and with it the session-start capture-health, compatibility and update notices |
 | `MEMHUB_RULEBOOK_RECALL=0` | Stops sending file paths and command lines for rule recall |
 | `MEMHUB_RULEBOOK_JUDGE=0` | Stops sending turns to the rule judge |
 | `MEMHUB_RULEBOOK_FETCH=0` | Stops fetching rules (the cache keeps applying) |
@@ -297,13 +352,13 @@ of them reads one:
 | `MEMHUB_PRLINK_NEGATIVE_TTL_S` | PR-link negative cache lifetime; `0` turns it off |
 | `MEMHUB_RULEBOOK_BASE`, `MEMHUB_STATE_DIR`, `MEMHUB_ROOMS_FILE`, `MEMHUB_HARNESS_DIR` | Move local state |
 | `MEMHUB_SPEC_DIR` | Where the spec reminder and onboarding look for specs |
+| `MEMHUB_PLUGIN_SCRIPTS` | Where the `find-contributing-sessions` and `start-rulebook` scripts load the plugin's scripts from, ahead of this plugin's own folder |
 | `MEMHUB_RULEBOOK_BASE_BRANCH` | Base branch for rule diff checks |
 | `MEMHUB_FLUSH_DEADLINE_S`, `MEMHUB_TURN_FLUSH_TIMEOUT_S`, `MEMHUB_RULEBOOK_TIMEOUT_S`, `MEMHUB_HARNESS_CLASSIFY_TIMEOUT`, `MEMHUB_OAUTH_TIMEOUT`, `MEMHUB_OAUTH_BIND_TIMEOUT` | Timeouts |
 | `MEMHUB_PAK_LABEL` | Label for the access key `/memhub:login` mints |
 | `MEMHUB_RULEBOOK_DEBUG`, `MEMHUB_HARNESS_DEBUG` | Print hook tracebacks to stderr |
-
-The plugin also sets `MEMHUB_HARNESS_CHILD` for its own background fork, and
-that fork's transcript is never captured.
+| `MEMHUB_RULEBOOK_HOOK_VERSION` | Test override for the hook version that rules' minimum-version checks compare against |
+| `MEMHUB_HARNESS_CHILD` | Marks a `claude` process started by XTrace's test tooling: it is not captured, `add_memory` is not gated, and harness drafting is off. The plugin never sets it |
 
 ## License
 
