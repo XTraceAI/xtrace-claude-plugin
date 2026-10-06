@@ -3201,6 +3201,18 @@ def repo_of_call(data):
     with nothing acted on stays silent exactly as before."""
     cwd = data.get("cwd") or os.getcwd()
     seed = _acted_on_dir(cwd, data.get("tool_input") or {})
+    if not seed and data.get("tool_name") == "apply_patch":
+        # Codex edits name their files inside the patch text, not in file_path,
+        # so the parent-folder workflow above resolved nothing on Codex and its
+        # edit rules stayed inert. The first patched file that passes the same
+        # containment checks decides the checkout.
+        try:
+            for path, _new, _added in apply_patch_files(data.get("tool_input") or {}, cwd):
+                seed = _acted_on_dir(cwd, {"file_path": path})
+                if seed:
+                    break
+        except (OSError, ValueError):   # payload strings are untrusted
+            seed = ""
     if seed:
         info = repo_info(seed)
         if info[0]:
@@ -4736,7 +4748,12 @@ def main():
     # fire's instant answers it. The old obligation logic converted only fires
     # already open; skipping the rules THIS call fires is the same statement.
     converted_hits = []
-    if mode == "post":
+    # The branch diff costs ~20 git calls (finding the base branch is most of
+    # it), so it is only taken when a `spec_untouched` entry for this root and
+    # branch is waiting to be answered; with none, the loop below finds nothing.
+    if mode == "post" and any(
+            isinstance(p, dict) and p.get("root") == probe_root and p.get("branch") == probe_branch
+            for p in st["spec_pending"].values()):
         changed = probes.diff_paths()
         if changed is not None:
             for rule in rules:
