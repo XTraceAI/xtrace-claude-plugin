@@ -49,6 +49,15 @@ server never re-saves an unchanged file. A path that exhausted its retries
 is remembered by content hash (``gaveup``): the sweep would otherwise offer
 it again on every Stop for as long as it stays modified in git, so it is
 retried only once its content changes.
+
+Each pass that ran a sweep records its outcome in the state's ``sweep`` key —
+``{"at": <start of the pass>, "idle": bool, "cwd": <Stop payload cwd>}`` — and
+``md_capture_prefilter.py`` reads it so the next Stop costs no process when
+nothing can have changed. ``idle`` is true only when every repo's
+``git status`` succeeded and every path this pass saw (``dirty`` and swept)
+reached a final outcome: saved, unchanged, non-candidate, or given up. A
+failed save, a capped-out candidate, a ``git status`` that failed or timed
+out, or an upgrade refusal all leave it false, so the next Stop runs again.
 """
 from __future__ import annotations
 
@@ -59,6 +68,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 from pathlib import Path
 
@@ -131,11 +141,14 @@ def _digest(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
-def sweep_repos(state: dict, cwd: str | None) -> list[str]:
+def sweep_repos(state: dict, cwd: str | None, report: dict | None = None) -> list[str]:
     """Canonical paths of modified/untracked ``.md`` files in every repo the
     session worked in — what a shell edit produced without passing through
     the collector. Empty when no collector ever ran (no start stamp: nothing
-    was written this session) or no recorded cwd is inside a git repo."""
+    was written this session) or no recorded cwd is inside a git repo.
+
+    ``report["complete"]`` is set False when a repo's ``git status`` failed
+    or timed out: an empty result then does NOT mean there was nothing."""
     since = state.get("since")
     if not isinstance(since, (int, float)):
         return []
@@ -152,13 +165,19 @@ def sweep_repos(state: dict, cwd: str | None) -> list[str]:
             roots.append(root)
     found: list[str] = []
     for root in roots:
-        for key in _sweep_one(root, float(since)):
+        keys = _sweep_one(root, float(since))
+        if keys is None:
+            if report is not None:
+                report["complete"] = False
+            continue
+        for key in keys:
             if key not in found:
                 found.append(key)
     return found
 
 
-def _sweep_one(root: Path, since: float) -> list[str]:
+def _sweep_one(root: Path, since: float) -> list[str] | None:
+    """The repo's candidates, or None when ``git status`` itself failed."""
     try:
         out = subprocess.run(
             git_readonly(root) + ["status", "--porcelain=v1", "-z",
@@ -167,10 +186,10 @@ def _sweep_one(root: Path, since: float) -> list[str]:
             env=git_env(), capture_output=True, timeout=SWEEP_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as e:
         _log(f"sweep {root.name}: git status failed ({type(e).__name__})")
-        return []
+        return None
     if out.returncode != 0:
         _log(f"sweep {root.name}: git status exit {out.returncode}")
-        return []
+        return None
     found: list[str] = []
     # `-z --no-renames`: one `XY <path>` record per NUL, no quoting, no
     # second path field. Ignored files are absent unless asked for (they
@@ -267,13 +286,26 @@ async def _save(session, call_args: dict) -> dict:
 
 
 async def flush(session_id: str, cwd: str | None = None) -> None:
+    started = time.time()   # before git status: a write after this is not covered
     state = load_state(session_id)
     dirty = list(state.get("dirty") or [])
     # The sweep never writes into `dirty`: a swept path that fails to save is
     # simply swept again next Stop (it is still modified in git), so it needs
     # no retry list — only the attempt counter and the give-up hash.
-    swept = [k for k in sweep_repos(state, cwd) if k not in dirty]
+    report = {"complete": True}
+    swept = [k for k in sweep_repos(state, cwd, report) if k not in dirty]
+    # Only a session with a start stamp has a sweep the prefilter could skip.
+    track = isinstance(state.get("since"), (int, float))
+
+    def outcome(processed: set) -> dict | None:
+        if not track:
+            return None
+        idle = report["complete"] and all(k in processed for k in dirty + swept)
+        return {"at": started, "idle": idle, "cwd": cwd or ""}
+
     if not dirty and not swept:
+        if track:
+            _persist(session_id, set(), {}, sweep=outcome(set()))
         return
     saved = dict(state.get("saved") or {})   # path -> content digest
     gaveup0 = dict(state.get("gaveup") or {})   # path -> digest that exhausted its retries
@@ -337,7 +369,8 @@ async def flush(session_id: str, cwd: str | None = None) -> None:
              f"the rest retry next Stop")
         todo = sorted(todo, key=lambda t: -len(t[2]))[:MAX_PER_TURN]
     if not todo:
-        _persist(session_id, processed, saved, _changed(attempts0, attempts), gaveup)
+        _persist(session_id, processed, saved, _changed(attempts0, attempts), gaveup,
+                 sweep=outcome(processed))
         return
 
     pending = {raw: d for raw, _, _, d in todo}   # not yet attempted this pass
@@ -442,7 +475,8 @@ async def flush(session_id: str, cwd: str | None = None) -> None:
         # Persist whatever was decided even if the connection itself failed:
         # non-candidates drop out, successes record their digest, everything
         # else remains dirty for the next Stop.
-        _persist(session_id, processed, saved, _changed(attempts0, attempts), gaveup)
+        _persist(session_id, processed, saved, _changed(attempts0, attempts), gaveup,
+                 sweep=outcome(processed))
 
 
 def _bump(attempts: dict, raw: str, processed: set, why: str,
@@ -471,7 +505,7 @@ def _changed(before: dict, after: dict) -> dict:
 
 
 def _persist(session_id: str, processed: set, saved: dict, attempts: dict | None = None,
-             gaveup: dict | None = None) -> None:
+             gaveup: dict | None = None, sweep: dict | None = None) -> None:
     """Write back by MERGING into a fresh read, never from the snapshot taken
     before the network window. The Stop hook is async, so the collector keeps
     appending to the same file while a save is in flight; persisting the
@@ -494,6 +528,13 @@ def _persist(session_id: str, processed: set, saved: dict, attempts: dict | None
     for k, n in (attempts or {}).items():
         if k not in processed:
             fa[k] = n
+    # The newest pass wins: two Stops' flushes can overlap, and an older pass
+    # finishing last must not overwrite a newer one's verdict.
+    if sweep is not None:
+        prior = fresh.get("sweep")
+        prior_at = prior.get("at") if isinstance(prior, dict) else None
+        if not isinstance(prior_at, (int, float)) or prior_at <= sweep["at"]:
+            fresh["sweep"] = sweep
     save_state(session_id, fresh)
 
 

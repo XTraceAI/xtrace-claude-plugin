@@ -53,7 +53,7 @@ def _update_action(host):
                   f"/plugin update {plugin}@{marketplace}, and restart this agent session.")
     elif host == "codex":
         action = (f"Refresh the {marketplace} marketplace and update {plugin} in Codex Plugins. "
-                  "Rerun /memhub:setup for bridge changes, then restart Codex and review the MemHub hooks.")
+                  f"Rerun /{plugin}:onboard for bridge changes, then restart Codex and review the MemHub hooks.")
     elif host == "cursor":
         action = (f"Open Cursor Settings > Plugins, refresh the {marketplace} marketplace "
                   f"and update {plugin}, then restart this agent session.")

@@ -21,6 +21,16 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" PreToolUse add_memory_gate"
           }
         ]
+      },
+      {
+        "matcher": "^mcp__.+__create_rule$",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_entry.py\" PreToolUse create_rule_origin"
+          }
+        ]
       }
     ],
     "PostToolUse": [

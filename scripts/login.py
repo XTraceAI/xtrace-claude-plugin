@@ -285,7 +285,7 @@ async def _run(status_only: bool, force: bool) -> int:
         elif headers and headers.get("Authorization"):
             source = "stored access key (mhk_)"
         else:
-            source = "browser OAuth (plugin client)"
+            source = "sign-in (device code; browser callback as fallback)"
         print(f"mode        : {source}")
 
         try:

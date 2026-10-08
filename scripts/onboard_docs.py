@@ -163,7 +163,7 @@ def _score(rel: Path, title: str, text: str, linked: bool) -> tuple[int, list[st
     return score, why
 
 
-def scan(root: Path) -> dict:
+def scan(root: Path, min_bytes: int = MIN_BYTES) -> dict:
     root = root.resolve()
     spec_dir = safe_spec_dir(os.environ.get("MEMHUB_SPEC_DIR", DEFAULT_SPEC_DIR)) or DEFAULT_SPEC_DIR
     linked = _readme_links(root)
@@ -191,7 +191,7 @@ def scan(root: Path) -> dict:
         except OSError:
             continue
         reason = _skip_reason(rel)
-        if reason is None and size < MIN_BYTES:
+        if reason is None and size < min_bytes:
             reason = "stub"
         if reason is None and size > MAX_BYTES:
             reason = "too large"

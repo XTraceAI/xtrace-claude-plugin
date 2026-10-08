@@ -976,3 +976,97 @@ async def oauth_authorize(url: str, client_id: str, redirect_uri: str,
         raise OAuthTokenError(
             f"Token exchange failed ({status}): {body.decode('utf-8', 'replace')}")
     return oauth_token(body)
+
+
+class DeviceFlowUnavailable(OAuthFlowError):
+    """This authorization server or client does not offer the device grant.
+
+    Not a failed login: the caller falls back to the browser flow."""
+
+
+_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+
+
+async def oauth_device_authorize(url: str, client_id: str, show_code, *,
+                                 www_authenticate: str | None = None,
+                                 discovery: OAuthDiscovery | None = None,
+                                 approval_timeout: float = 300.0,
+                                 timeout: float = _OAUTH_TIMEOUT_S,
+                                 sleep=None) -> dict:
+    """The device login (RFC 8628): no localhost callback, so no port to lose.
+
+    The browser flow needs a listener on the pre-registered callback port,
+    which ``/mcp``'s own sign-in uses too, and which a container, an SSH
+    session or a second login in flight cannot give it. Here the person
+    approves a short code on the authorization server's page and this polls
+    the token endpoint until they do.
+
+    ``show_code(verification_uri_complete, user_code)`` tells the person
+    (opens the page, prints the code). Raises ``DeviceFlowUnavailable`` when
+    the server publishes no device endpoint or refuses this client the grant,
+    ``OAuthFlowError`` when the person denies it or the code expires. Returns
+    the token in ``oauth_token`` shape, like ``oauth_authorize``.
+    """
+    import asyncio  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    sleep = sleep or asyncio.sleep
+    if discovery is None:
+        if www_authenticate is None:
+            www_authenticate = auth_challenge(url, timeout)
+        discovery = discover_oauth(url, www_authenticate, timeout)
+    device_url = (discovery.metadata or {}).get("device_authorization_endpoint")
+    if not isinstance(device_url, str) or not device_url:
+        raise DeviceFlowUnavailable("no device_authorization_endpoint")
+    require_secure(device_url)
+
+    form = {"client_id": client_id}
+    if discovery.scope:
+        form["scope"] = discovery.scope
+    # No `audience` / `resource`: Auth0 rejects the MCP URL as an API name
+    # ("Service not found") and issues the tenant's default audience without
+    # one, which is the token the browser flow ends up with too.
+    status, _, body = _http(
+        device_url, "POST", urllib.parse.urlencode(form).encode(),
+        {"Content-Type": "application/x-www-form-urlencoded"}, timeout)
+    doc = _json_object(body) or {}
+    if status != 200:
+        if doc.get("error") in ("unauthorized_client", "unsupported_grant_type"):
+            raise DeviceFlowUnavailable(doc.get("error"))
+        raise OAuthFlowError(
+            f"Device authorization failed ({status}): {doc.get('error_description') or doc.get('error') or ''}")
+    device_code, user_code = doc.get("device_code"), doc.get("user_code")
+    if not (isinstance(device_code, str) and isinstance(user_code, str)):
+        raise OAuthFlowError("Device authorization answered without a code")
+    page = doc.get("verification_uri_complete") or doc.get("verification_uri")
+    await _maybe_await(show_code(page, user_code))
+
+    interval = float(doc.get("interval") or 5)
+    expires = min(float(doc.get("expires_in") or approval_timeout), approval_timeout)
+    deadline = time.monotonic() + expires
+    token_url = discovery.endpoint(url, "token")
+    require_secure(token_url)
+    poll = {"grant_type": _DEVICE_GRANT, "device_code": device_code,
+            "client_id": client_id}
+    while True:
+        await sleep(interval)
+        if time.monotonic() >= deadline:
+            raise OAuthFlowError(
+                f"Sign-in was not approved within {int(expires)}s. Run login again.")
+        status, _, body = _http(
+            token_url, "POST", urllib.parse.urlencode(poll).encode(),
+            {"Content-Type": "application/x-www-form-urlencoded"}, timeout)
+        if status == 200:
+            return oauth_token(body)
+        error = (_json_object(body) or {}).get("error")
+        if error == "authorization_pending":
+            continue
+        if error == "slow_down":
+            interval += 5
+            continue
+        if error == "access_denied":
+            raise OAuthFlowError("Sign-in was declined in the browser.")
+        if error == "expired_token":
+            raise OAuthFlowError("The sign-in code expired. Run login again.")
+        raise OAuthTokenError(
+            f"Token exchange failed ({status}): {body.decode('utf-8', 'replace')[:200]}")

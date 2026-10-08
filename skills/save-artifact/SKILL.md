@@ -44,11 +44,13 @@ Do exactly this:
    `plan`, `runbook`, or `document` (default). These are the types the brain's
    Index groups by; anything else folds into Documents — so an ADR goes in as
    `design_doc`, not `adr`, to land under Design.
-3. Run the upload via Bash — substitute the real values, keep it one command:
+3. Run the upload via Bash — substitute the real values, keep it ONE command
+   on ONE line (no `\` line breaks: a command split across lines does not
+   match this skill's pre-approved `save_artifact.py` call, so it stops for an
+   approval nobody may be there to give):
 
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/save_artifact.py" \
-     --file "<path>" --name "<name>" --type "<type>" --tags "<a,b>" --topic "<topic>"
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/save_artifact.py" --file "<path>" --name "<name>" --type "<type>" --tags "<a,b>" --topic "<topic>"
    ```
 
    A file inside a git repo routes to that repo's room automatically — from
@@ -88,10 +90,7 @@ Do exactly this:
    your context either:
 
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/save_artifact.py" \
-     --attach "<rendered file>" [--attach "<another>"] \
-     [--entrypoint "<the file to render first>"] \
-     [--file "<a short text summary>"] --name "<name>" --type document
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/save_artifact.py" --attach "<rendered file>" [--attach "<another>"] [--entrypoint "<the file to render first>"] [--file "<a short text summary>"] --name "<name>" --type document
    ```
 
    `--attach` is repeatable, and the bundle keeps the structure **below the

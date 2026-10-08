@@ -43,7 +43,10 @@ from urllib.parse import urlparse
 import atomic_write
 import mcp_http
 
-CACHE_DIR = Path.home() / ".config" / "memhub-plugin"
+# $MEMHUB_CONFIG_DIR moves the credentials (token cache, access key) so a
+# harness can sign in fresh without touching this machine's real key.
+CACHE_DIR = Path(os.environ.get("MEMHUB_CONFIG_DIR")
+                 or Path.home() / ".config" / "memhub-plugin")
 
 # Long enough not to be a chore, short enough that a leaked key is not forever.
 # Cheap to renew precisely because /memhub:login mints it programmatically.
